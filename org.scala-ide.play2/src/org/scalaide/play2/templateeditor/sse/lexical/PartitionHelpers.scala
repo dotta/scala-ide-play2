@@ -17,19 +17,20 @@ object PartitionHelpers {
     token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && s.length > 0 && s.foldLeft(true)((r, c) => r && (c == '{' || c == '}' || c.isWhitespace))
   }
   
-  private def detectSequence(codeString: String, fs: ListBuffer[Char => Boolean], marked: Int, isIgnored: Char => Boolean): Option[Int] = {
+  private def detectSequence(codeString: String, fs: List[Char => Boolean], marked: Int, isIgnored: Char => Boolean): Option[Int] = {
+    val fsMutable = fs.toBuffer
     var sawBadChar = false
     var index = -1
     var currentF = 0
-    for (i <- 0 to codeString.length() - 1) {
+    for (i <- 0 until codeString.length()) {
       val c = codeString(i)
-      if (fs.isEmpty) 
+      if (fsMutable.isEmpty) 
         sawBadChar = sawBadChar || (!isIgnored(c))
       else {
-        if (fs.head(c)) {
+        if (fsMutable.head(c)) {
           if (currentF == marked)
             index = i
-          fs.remove(0)
+          fsMutable.remove(0)
           currentF += 1
         }
         else
@@ -37,7 +38,7 @@ object PartitionHelpers {
       }
     }
     
-    if(fs.isEmpty && !sawBadChar)
+    if(fsMutable.isEmpty && !sawBadChar)
       Some(index)
     else
       None
@@ -51,20 +52,19 @@ object PartitionHelpers {
   def isCombinedBraceMagicAt(token: ITypedRegion, codeString: String): Boolean = {
     val s = codeString.substring(token.getOffset(), token.getOffset() + token.getLength())
     if(token.getType() == TemplatePartitions.TEMPLATE_DEFAULT) {
-      val firstBrace = {c: Char => c == '{' || c == '}'}
-      val secondAt = {c: Char => c == '@'}
+      val isBrace = {c: Char => c == '{' || c == '}'}
+      val isAt = {c: Char => c == '@'}
       val ignored = {c: Char => c == ' ' || c == '\t'}
-      detectSequence(s, ListBuffer(firstBrace, secondAt), 0, ignored).isDefined
+      detectSequence(s, List(isBrace, isAt), 0, ignored).isDefined
     }
     else false
   }
 
   /* Combines neighbouring regions based on some user provided criteria */
   def explodeAdjacent[T, Repr <: Seq[ITypedRegion]](partitions: Repr)(exploder: (ITypedRegion, ITypedRegion, T) => Seq[ITypedRegion])(test: (ITypedRegion, ITypedRegion) => Option[T]): IndexedSeq[ITypedRegion] = {
-    val htmlPartitions = Set(TemplatePartitions.TEMPLATE_PLAIN, TemplatePartitions.TEMPLATE_TAG)
     val accum = new ArrayBuffer[ITypedRegion]
     for (region <- partitions) {
-      if (accum.length == 0)
+      if (accum.isEmpty)
         accum += region
       else {
         val previousRegion = accum.last
@@ -83,10 +83,11 @@ object PartitionHelpers {
 
   private def merge(l: ITypedRegion, r: ITypedRegion, t: String) =
     List(new TypedRegion(l.getOffset, l.getLength + r.getLength, t))
+    
+  private val htmlPartitions = Set(TemplatePartitions.TEMPLATE_PLAIN, TemplatePartitions.TEMPLATE_TAG)
   
   /* Combines neighbouring regions that have the same type */
   def mergeAdjacentWithSameType[Repr <: Seq[ITypedRegion]](partitions: Repr): IndexedSeq[ITypedRegion] = {
-    val htmlPartitions = Set(TemplatePartitions.TEMPLATE_PLAIN, TemplatePartitions.TEMPLATE_TAG)
     explodeAdjacent(partitions)(merge) { (previousRegion, region) =>
       if (((htmlPartitions contains region.getType) && (htmlPartitions contains previousRegion.getType)) ||
          (region.getType == TemplatePartitions.TEMPLATE_SCALA && previousRegion.getType == TemplatePartitions.TEMPLATE_SCALA))
@@ -115,10 +116,10 @@ object PartitionHelpers {
     explodeAdjacent(partitions)(explode) { (left, _) =>
       if (left.getType() == TemplatePartitions.TEMPLATE_DEFAULT) {
         val code = codeString.substring(left.getOffset(), left.getOffset() + left.getLength())
-        def firstEqual = {c: Char => c == '='}
-        def secondBrace = {c: Char => c == '{' || c == '@'}
+        def isEquals = {c: Char => c == '='}
+        def isBraceOrAt = {c: Char => c == '{' || c == '@'}
         def ignored = {c: Char => c == ' ' || c == '\t'}
-        detectSequence(code, ListBuffer(firstEqual, secondBrace), 1, ignored) map (_ + left.getOffset())
+        detectSequence(code, List(isEquals, isBraceOrAt), 1, ignored) map (_ + left.getOffset())
       }
       else None
     }
