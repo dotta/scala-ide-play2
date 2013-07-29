@@ -43,6 +43,7 @@ import org.eclipse.wst.xml.core.internal.parser.regions.RegionUpdateRule
 import org.eclipse.wst.sse.core.internal.util.Utilities
 import play.templates.ScalaTemplateParser
 import org.eclipse.jface.text.TypedRegion
+import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import org.eclipse.jface.text.Document
 import PartitionHelpers._
@@ -108,100 +109,32 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     contents = sb.toString()
     cachedRegions.reset()
   }
+
   
-  def computeRegions(codeString: String): Array[IStructuredDocumentRegion] = { 
-    val htmlDocumentRegions = htmlParse(codeString)
-    lazy val htmlDocumentRegionsMap = buildDocRegionMap(htmlDocumentRegions, codeString.length)
-    lazy val htmlDocumentRegionsLength = getNumberOfDocumentRegions(htmlDocumentRegions)
-    var resultRegions = htmlDocumentRegions
+  private[lexical] def computeRegions(codeString: String): Array[IStructuredDocumentRegion] = { 
+    val htmlHeadRegion: RichStructuredDocumentRegion = htmlParse(codeString)
+    var resultRegions: IStructuredDocumentRegion = htmlHeadRegion
     
     // tokenise, merge '@' tokens with scala code tokens, and then merge any adjacent tokens of the same type.
     // Merging here has the affect of not having neighbouring document regions of the same type
     val tokens = separateBraceOrMagicAtFromEqual(TemplatePartitionTokeniser.tokenise(codeString), codeString).toVector
-    val tokenIndexLookup = new collection.mutable.HashMap[Int, ITypedRegion]
-    tokenIndexLookup.sizeHint(tokens.length)
-    for (reg <- tokens) {
-      val kv = (reg.getOffset(), reg)
-      tokenIndexLookup += kv
-    }
-
+    val templateRegionComputer = new TemplateRegionComputer(new Document(codeString), tokens)
     val mergedTokens = mergeAdjacentWithSameType(combineMagicAt(tokens, codeString)).toArray
-    val dummyDoc = new Document(codeString)
     for (token <- mergedTokens) {
-      val representsHTML =
-        (token.getType() == TemplatePartitions.TEMPLATE_PLAIN ||
-         token.getType() == TemplatePartitions.TEMPLATE_TAG   ||
-         (token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && !PartitionHelpers.isBrace(token, codeString) && !PartitionHelpers.isCombinedBraceMagicAt(token, codeString)))
-      if (!representsHTML) {
-        val (templateTextRegions: Seq[ScalaTextRegion], scalaDocType: String) = {
-          if (token.getType == TemplatePartitions.TEMPLATE_SCALA) {
-            val regions = new ListBuffer[ScalaTextRegion]
-            var currentIndex = token.getOffset()
-            while (currentIndex < (token.getOffset() + token.getLength())) {
-              val t = tokenIndexLookup(currentIndex)
-              if (PartitionHelpers.isMagicAt(t, codeString)) {
-                regions += new ScalaTextRegion(TemplateSyntaxClasses.MAGIC_AT, t.getOffset() - token.getOffset(), t.getLength(), t.getLength())
-              } // actual scala code
-              else { //if (t.getType() == TemplatePartitions.TEMPLATE_SCALA) {
-                // TODO - figure out a good way to get the prefstore from the editor
-                val prefStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
-                val scanner = new ScalaCodeScanner(prefStore, ScalaVersions.Scala_2_10)
-                val tokens = scanner.tokenize(dummyDoc, t.getOffset(), t.getLength())
-                tokens.foreach{ v =>
-                  regions += new ScalaTextRegion(v.syntaxClass, v.start - token.getOffset(), v.length, v.length)
-                }
-              }
-              currentIndex += t.getLength()
-            } 
-            
-            (regions, TemplateDocumentRegions.SCALA_DOC_REGION)
-          }
-          else if (PartitionHelpers.isBrace(token, codeString))
-            (List(new ScalaTextRegion(TemplateSyntaxClasses.BRACE, 0, token.getLength(), token.getLength())), TemplateDocumentRegions.SCALA_DOC_REGION)
-          else if (token.getType == TemplatePartitions.TEMPLATE_COMMENT)
-            (List(new ScalaTextRegion(TemplateSyntaxClasses.COMMENT, 0, token.getLength(), token.getLength())), TemplateDocumentRegions.COMMENT_DOC_REGION)
-          else if (PartitionHelpers.isCombinedBraceMagicAt(token, codeString)) {
-            val splitIndex = codeString.indexWhere({c: Char => (c == '}' || c == '{')}, token.getOffset())
-            val braceLen = splitIndex - token.getOffset()
-            val magicAtLen = token.getLength() - braceLen
-            val brace = new ScalaTextRegion(TemplateSyntaxClasses.BRACE, 0, braceLen, braceLen)
-            val magicAt = new ScalaTextRegion(TemplateSyntaxClasses.MAGIC_AT, braceLen, magicAtLen, magicAtLen)
-            (List(brace, magicAt), TemplateDocumentRegions.SCALA_DOC_REGION)
-          }
-          else (List(), "UNDEFINED")
-        }
-        
+      if (!isHtmlToken(codeString, token)) {
+        val (templateTextRegions: Seq[ScalaTextRegion], scalaDocType: String) = templateRegionComputer(token)
         // If there are scala text regions, insert them into the HTML document regions
         if (templateTextRegions.nonEmpty) {
           // absolute offsets
           val (startEffectedOffset, endEffectedOffset) = (token.getOffset(), token.getOffset() + token.getLength())
-          val startEffectedDocumentRegionOpt = htmlDocumentRegionsMap.get(startEffectedOffset)
-          val endEffectedDocumentRegionOpt = htmlDocumentRegionsMap.get(endEffectedOffset - 1)
-          (startEffectedDocumentRegionOpt, endEffectedDocumentRegionOpt) match {
+          (htmlHeadRegion.regionMap.get(startEffectedOffset), htmlHeadRegion.regionMap.get(endEffectedOffset - 1)) match {
             case (Some(startEffectedDocumentRegion), Some(endEffectedDocumentRegion)) => {
               // If the scala text regions spans exactly the same space as the document regions it overlaps
               // Then replace those document regions with our own document regions
               if (startEffectedDocumentRegion.getStart() == startEffectedOffset && endEffectedDocumentRegion.getEnd() == endEffectedOffset) {
-                val region = new BasicStructuredDocumentRegion { override def getType() = scalaDocType }
-                region.setStart(startEffectedOffset)
-                region.setLength(token.getLength())
-                templateTextRegions.foreach(region.addRegion(_))
-                
-                if (htmlDocumentRegionsLength == 1)
-                  resultRegions = region
-                else {
-                  // insert our new region where the effected regions were
-                  Option(startEffectedDocumentRegion.getPrevious()).foreach { previous =>
-                    previous.setNext(region)
-                    region.setPrevious(previous)
-                  }
-                  Option(endEffectedDocumentRegion.getNext()) match {
-                    case Some(next) =>
-                      next.setPrevious(region)
-                      region.setNext(next)
-                    case None => region.setEnded(true)
-                  }
-                }
+                val newRegion = replaceDocumentRegionsWithTemplateTextRegions(startEffectedDocumentRegion, endEffectedDocumentRegion, scalaDocType, templateTextRegions)
+                if (htmlHeadRegion.regionCount == 1)
+                  resultRegions = newRegion
               }
               else {
                 // handle the case where we need to trim text regions and then insert our text regions
@@ -236,29 +169,88 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     
     ab.result.toArray
   }
-
-  def buildDocRegionMap(headRegion: IStructuredDocumentRegion, documentSize: Int): collection.Map[Int, IStructuredDocumentRegion] = {
-    val map = new HashMap[Int, IStructuredDocumentRegion]
-    map.sizeHint(documentSize / 50) // just a gut feeling that doc regions average around 50 characters in size
-    var current = headRegion
-    while (current != null) {
-      for (i <- current.getStart() to (current.getEnd() - 1))
-        map(i) = current
-      current = current.getNext()
+  
+  private[lexical] implicit def richStructuredDocumentRegion2structuredDocumentRegion(doc: RichStructuredDocumentRegion): IStructuredDocumentRegion = doc.region
+  private[lexical] implicit class RichStructuredDocumentRegion(val region: IStructuredDocumentRegion) {
+    /* Maps document offsets to document regions */
+    lazy val regionMap: collection.Map[Int, IStructuredDocumentRegion] = {
+      val map = new HashMap[Int, IStructuredDocumentRegion]
+      var current = region
+      while (current != null) {
+        for (i <- current.getStart() to (current.getEnd() - 1))
+          map(i) = current
+        current = current.getNext()
+      }
+      map
     }
-    map
+
+    /* How many regions are in linked list that this region is the head of? */
+    lazy val regionCount = {
+      @tailrec
+      def aux(region: IStructuredDocumentRegion, count: Int): Int = {
+        if (region == null) count
+        else aux(region.getNext(), count + 1)
+      }
+      aux(region, 0)
+    }
   }
 
-  def getNumberOfDocumentRegions(headRegion: IStructuredDocumentRegion) = {
-    @tailrec
-    def aux(region: IStructuredDocumentRegion, count: Int): Int = {
-      if (region == null) count
-      else aux(region.getNext(), count + 1)
+  private class TemplateRegionComputer(doc: IDocument, tokens: Seq[ITypedRegion]) {
+    val tokenIndexLookup: mutable.HashMap[Int, ITypedRegion] = createTokenIndexLookup(tokens)  
+    
+    def apply(token: ITypedRegion): (Seq[ScalaTextRegion], String) = {
+      val codeString = doc.get()
+      if (token.getType == TemplatePartitions.TEMPLATE_SCALA) {
+        computeScalaRegions(token)
+      } else if (PartitionHelpers.isBrace(token, codeString))
+        (List(new ScalaTextRegion(TemplateSyntaxClasses.BRACE, 0, token.getLength(), token.getLength())), TemplateDocumentRegions.SCALA_DOC_REGION)
+      else if (token.getType == TemplatePartitions.TEMPLATE_COMMENT)
+        (List(new ScalaTextRegion(TemplateSyntaxClasses.COMMENT, 0, token.getLength(), token.getLength())), TemplateDocumentRegions.COMMENT_DOC_REGION)
+      else if (PartitionHelpers.isCombinedBraceMagicAt(token, codeString)) {
+        val splitIndex = codeString.indexWhere({ c: Char => (c == '}' || c == '{') }, token.getOffset())
+        val braceLen = splitIndex - token.getOffset()
+        val magicAtLen = token.getLength() - braceLen
+        val brace = new ScalaTextRegion(TemplateSyntaxClasses.BRACE, 0, braceLen, braceLen)
+        val magicAt = new ScalaTextRegion(TemplateSyntaxClasses.MAGIC_AT, braceLen, magicAtLen, magicAtLen)
+        (List(brace, magicAt), TemplateDocumentRegions.SCALA_DOC_REGION)
+      } else (List(), "UNDEFINED")
     }
-    aux(headRegion, 0)
+    
+    private def computeScalaRegions(token: ITypedRegion): (Seq[ScalaTextRegion], String) = {
+      val regions = new ListBuffer[ScalaTextRegion]
+      var currentIndex = token.getOffset()
+      while (currentIndex < (token.getOffset() + token.getLength())) {
+        val t = tokenIndexLookup(currentIndex)
+        if (PartitionHelpers.isMagicAt(t, doc.get())) {
+          regions += new ScalaTextRegion(TemplateSyntaxClasses.MAGIC_AT, t.getOffset() - token.getOffset(), t.getLength(), t.getLength())
+        } // actual scala code
+        else { //if (t.getType() == TemplatePartitions.TEMPLATE_SCALA) {
+          // TODO - figure out a good way to get the prefstore from the editor
+          val prefStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
+          val scanner = new ScalaCodeScanner(prefStore, ScalaVersions.Scala_2_10)
+          val tokens = scanner.tokenize(doc, t.getOffset(), t.getLength())
+          tokens.foreach { v =>
+            regions += new ScalaTextRegion(v.syntaxClass, v.start - token.getOffset(), v.length, v.length)
+          }
+        }
+        currentIndex += t.getLength()
+      }
+
+      (regions, TemplateDocumentRegions.SCALA_DOC_REGION)
+    }
+
+    private def createTokenIndexLookup(tokens: Seq[ITypedRegion]): mutable.HashMap[Int, ITypedRegion] = {
+      val tokenIndexLookup = new mutable.HashMap[Int, ITypedRegion]
+      tokenIndexLookup.sizeHint(tokens.length)
+      for (reg <- tokens) {
+        val kv = (reg.getOffset(), reg)
+        tokenIndexLookup += kv
+      }
+      tokenIndexLookup
+    }
   }
 
-  def htmlParse(codeString: String): IStructuredDocumentRegion = {
+  private def htmlParse(codeString: String): IStructuredDocumentRegion = {
     // The block regions enable javascript and css support, as BLOCK_TEXT regions are treated special by the html component
     import org.eclipse.wst.xml.core.internal.regions.DOMRegionContext
     import org.eclipse.wst.sse.core.internal.ltk.parser.BlockMarker
@@ -267,6 +259,33 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     htmlParser.addBlockMarker(new BlockMarker("style", null, DOMRegionContext.BLOCK_TEXT, false))
     htmlParser.reset(codeString)
     htmlParser.getDocumentRegions()
+  }
+
+  private def isHtmlToken(codeString: String, token: ITypedRegion): Boolean = {
+    token.getType() == TemplatePartitions.TEMPLATE_PLAIN ||
+    token.getType() == TemplatePartitions.TEMPLATE_TAG ||
+    (token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && !PartitionHelpers.isBrace(token, codeString) && !PartitionHelpers.isCombinedBraceMagicAt(token, codeString))
+  }
+
+  private def replaceDocumentRegionsWithTemplateTextRegions(leftReplacedDocumentRegion: IStructuredDocumentRegion, rightReplacedDocumentRegion: IStructuredDocumentRegion, templateDocType: String, templateTextRegions: Seq[ScalaTextRegion]): IStructuredDocumentRegion = {
+    val startEffectedOffset = leftReplacedDocumentRegion.getStart()
+    val endEffectedOffset = rightReplacedDocumentRegion.getEnd()
+    val region = new BasicStructuredDocumentRegion { override def getType() = templateDocType }
+    region.setStart(startEffectedOffset)
+    region.setLength(endEffectedOffset - startEffectedOffset)
+    templateTextRegions.foreach(region.addRegion(_))
+    // insert our new region where the effected regions were
+    Option(leftReplacedDocumentRegion.getPrevious()).foreach { previous =>
+      previous.setNext(region)
+      region.setPrevious(previous)
+    }
+    Option(rightReplacedDocumentRegion.getNext()) match {
+      case Some(next) =>
+        next.setPrevious(region)
+        region.setNext(next)
+      case None => region.setEnded(true)
+    }
+    region
   }
 
   private def insertScalaRegions(effectedDocRegion: IStructuredDocumentRegion, templateTextRegions: Seq[ScalaTextRegion], startEffectedOffset: Int, endEffectedOffset: Int) = {
@@ -326,38 +345,10 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     effectedDocRegion.setRegions(newTextRegionList)
   }
   
-  def insertScalaRegionsOverMultipleDocRegions(globalTokenOffset: Int, templateTextRegions: Seq[ScalaTextRegion], startEffectedDocumentRegion: IStructuredDocumentRegion, startEffectedOffset: Int, endEffectedDocumentRegion: IStructuredDocumentRegion, endEffectedOffset: Int) = {
+  private def insertScalaRegionsOverMultipleDocRegions(globalTokenOffset: Int, templateTextRegions: Seq[ScalaTextRegion], startEffectedDocumentRegion: IStructuredDocumentRegion, startEffectedOffset: Int, endEffectedDocumentRegion: IStructuredDocumentRegion, endEffectedOffset: Int) = {
     // Get a list of all effected document regions, plus their corresponding start and end effected offsets
     //   (which will correspond exactly to the document's start and end for the non-head and non-tail elements.
-    var effectedDocuments: ListBuffer[(IStructuredDocumentRegion, Int, Int)] = {
-      val result: ListBuffer[(IStructuredDocumentRegion, Int, Int)] = ListBuffer((startEffectedDocumentRegion, startEffectedOffset, startEffectedDocumentRegion.getEnd()))
-      var doc = startEffectedDocumentRegion.getNext()
-      while (doc != endEffectedDocumentRegion) {
-        doc = doc.getNext()
-        if (doc != endEffectedDocumentRegion)
-          result += ((doc, doc.getStart(), doc.getEnd()))
-      }
-      result += ((endEffectedDocumentRegion, endEffectedDocumentRegion.getStart(), endEffectedOffset))
-
-      // there can be gaps.. so create new doc regions for the gaps
-      for (i <- 0 to (result.length - 2)) {
-        val ((l, lstart, lend), (r, rstart, _)) = result(i) -> result(i + 1)
-        if (lend != rstart) {
-          val newRegion = new BasicStructuredDocumentRegion
-          newRegion.addRegion(new ContextRegion("UNDEFINED", 0, rstart - lend, rstart - lend))
-          newRegion.setStart(lend)
-          newRegion.setLength(rstart - lend)
-          l.setNext(newRegion)
-          newRegion.setPrevious(l)
-          newRegion.setNext(r)
-          r.setPrevious(newRegion)
-          result.insert(i + 1, (newRegion, lend, rstart))
-        }
-      }
-
-      result
-    }
-
+    var effectedDocuments: ListBuffer[(IStructuredDocumentRegion, Int, Int)] = overlappedDocumentRegions(startEffectedDocumentRegion, endEffectedDocumentRegion, startEffectedOffset, endEffectedOffset, true)
     var currentTextRegion = 0
     val scalaRegions: ArrayBuffer[ScalaTextRegion] = ArrayBuffer()
     for ((effectedDocRegion, startEffectedOffset, endEffectedOffset) <- effectedDocuments) {
@@ -407,6 +398,37 @@ class TemplateRegionParser extends RegionParser with HasLogger {
       insertScalaRegions(effectedDocRegion, scalaRegions, startEffectedOffset, endEffectedOffset)
       scalaRegions.clear()
     }
+  }
+  
+  private def overlappedDocumentRegions(leftBound: IStructuredDocumentRegion, rightBound: IStructuredDocumentRegion, startOffset: Int, endOffset: Int, fillGaps: Boolean): ListBuffer[(IStructuredDocumentRegion, Int, Int)] = {
+    val result: ListBuffer[(IStructuredDocumentRegion, Int, Int)] = ListBuffer((leftBound, startOffset, leftBound.getEnd()))
+    var doc = leftBound.getNext()
+    while (doc != rightBound) {
+      doc = doc.getNext()
+      if (doc != rightBound)
+        result += ((doc, doc.getStart(), doc.getEnd()))
+    }
+    result += ((rightBound, rightBound.getStart(), endOffset))
+
+    // there can be gaps.. so create new doc regions for the gaps
+    if (fillGaps) {
+      for (i <- 0 to (result.length - 2)) {
+        val ((l, lstart, lend), (r, rstart, _)) = result(i) -> result(i + 1)
+        if (lend != rstart) {
+          val newRegion = new BasicStructuredDocumentRegion
+          newRegion.addRegion(new ContextRegion("UNDEFINED", 0, rstart - lend, rstart - lend))
+          newRegion.setStart(lend)
+          newRegion.setLength(rstart - lend)
+          l.setNext(newRegion)
+          newRegion.setPrevious(l)
+          newRegion.setNext(r)
+          r.setPrevious(newRegion)
+          result.insert(i + 1, (newRegion, lend, rstart))
+        }
+      }
+    }
+
+    result
   }
 
   private def copyXMLTextRegion(region: ITextRegion): ITextRegion = region match {
