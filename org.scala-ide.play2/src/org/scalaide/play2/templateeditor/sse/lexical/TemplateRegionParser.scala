@@ -43,6 +43,7 @@ import org.eclipse.wst.xml.core.internal.parser.regions.RegionUpdateRule
 import org.eclipse.wst.sse.core.internal.util.Utilities
 import play.templates.ScalaTemplateParser
 import org.eclipse.jface.text.TypedRegion
+import scala.collection.mutable
 import scala.collection.mutable.ListBuffer
 import org.eclipse.jface.text.Document
 import PartitionHelpers._
@@ -109,7 +110,7 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     cachedRegions.reset()
   }
   
-  def computeRegions(codeString: String): Array[IStructuredDocumentRegion] = { 
+  private[lexical] def computeRegions(codeString: String): Array[IStructuredDocumentRegion] = { 
     val htmlDocumentRegions = htmlParse(codeString)
     lazy val htmlDocumentRegionsMap = buildDocRegionMap(htmlDocumentRegions, codeString.length)
     lazy val htmlDocumentRegionsLength = getNumberOfDocumentRegions(htmlDocumentRegions)
@@ -118,7 +119,7 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     // tokenise, merge '@' tokens with scala code tokens, and then merge any adjacent tokens of the same type.
     // Merging here has the affect of not having neighbouring document regions of the same type
     val tokens = separateBraceOrMagicAtFromEqual(TemplatePartitionTokeniser.tokenise(codeString), codeString).toVector
-    val tokenIndexLookup = new collection.mutable.HashMap[Int, ITypedRegion]
+    val tokenIndexLookup = new mutable.HashMap[Int, ITypedRegion]
     tokenIndexLookup.sizeHint(tokens.length)
     for (reg <- tokens) {
       val kv = (reg.getOffset(), reg)
@@ -126,35 +127,12 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     }
 
     val mergedTokens = mergeAdjacentWithSameType(combineMagicAt(tokens, codeString)).toArray
-    val dummyDoc = new Document(codeString)
     for (token <- mergedTokens) {
-      val representsHTML =
-        (token.getType() == TemplatePartitions.TEMPLATE_PLAIN ||
-         token.getType() == TemplatePartitions.TEMPLATE_TAG   ||
-         (token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && !PartitionHelpers.isBrace(token, codeString) && !PartitionHelpers.isCombinedBraceMagicAt(token, codeString)))
+      val representsHTML = isHtmlToken(codeString, token)
       if (!representsHTML) {
         val (templateTextRegions: Seq[ScalaTextRegion], scalaDocType: String) = {
           if (token.getType == TemplatePartitions.TEMPLATE_SCALA) {
-            val regions = new ListBuffer[ScalaTextRegion]
-            var currentIndex = token.getOffset()
-            while (currentIndex < (token.getOffset() + token.getLength())) {
-              val t = tokenIndexLookup(currentIndex)
-              if (PartitionHelpers.isMagicAt(t, codeString)) {
-                regions += new ScalaTextRegion(TemplateSyntaxClasses.MAGIC_AT, t.getOffset() - token.getOffset(), t.getLength(), t.getLength())
-              } // actual scala code
-              else { //if (t.getType() == TemplatePartitions.TEMPLATE_SCALA) {
-                // TODO - figure out a good way to get the prefstore from the editor
-                val prefStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
-                val scanner = new ScalaCodeScanner(prefStore, ScalaVersions.Scala_2_10)
-                val tokens = scanner.tokenize(dummyDoc, t.getOffset(), t.getLength())
-                tokens.foreach{ v =>
-                  regions += new ScalaTextRegion(v.syntaxClass, v.start - token.getOffset(), v.length, v.length)
-                }
-              }
-              currentIndex += t.getLength()
-            } 
-            
-            (regions, TemplateDocumentRegions.SCALA_DOC_REGION)
+            computeScalaRegions(codeString, token, tokenIndexLookup)
           }
           else if (PartitionHelpers.isBrace(token, codeString))
             (List(new ScalaTextRegion(TemplateSyntaxClasses.BRACE, 0, token.getLength(), token.getLength())), TemplateDocumentRegions.SCALA_DOC_REGION)
@@ -236,8 +214,38 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     
     ab.result.toArray
   }
+  
+  private def isHtmlToken(codeString: String, token: ITypedRegion): Boolean = {
+     token.getType() == TemplatePartitions.TEMPLATE_PLAIN ||
+     token.getType() == TemplatePartitions.TEMPLATE_TAG   ||
+     (token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && !PartitionHelpers.isBrace(token, codeString) && !PartitionHelpers.isCombinedBraceMagicAt(token, codeString))
+  }
 
-  def buildDocRegionMap(headRegion: IStructuredDocumentRegion, documentSize: Int): collection.Map[Int, IStructuredDocumentRegion] = {
+  private def computeScalaRegions(codeString: String, token: ITypedRegion, tokenIndexLookup: mutable.HashMap[Int, ITypedRegion]): (Seq[ScalaTextRegion], String) = {
+    val regions = new ListBuffer[ScalaTextRegion]
+    var currentIndex = token.getOffset()
+    while (currentIndex < (token.getOffset() + token.getLength())) {
+      val t = tokenIndexLookup(currentIndex)
+      if (PartitionHelpers.isMagicAt(t, codeString)) {
+        regions += new ScalaTextRegion(TemplateSyntaxClasses.MAGIC_AT, t.getOffset() - token.getOffset(), t.getLength(), t.getLength())
+      } // actual scala code
+      else { //if (t.getType() == TemplatePartitions.TEMPLATE_SCALA) {
+        // TODO - figure out a good way to get the prefstore from the editor
+        val prefStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
+        val scanner = new ScalaCodeScanner(prefStore, ScalaVersions.Scala_2_10)
+        val dummyDoc = new Document(codeString)
+        val tokens = scanner.tokenize(dummyDoc, t.getOffset(), t.getLength())
+        tokens.foreach { v =>
+          regions += new ScalaTextRegion(v.syntaxClass, v.start - token.getOffset(), v.length, v.length)
+        }
+      }
+      currentIndex += t.getLength()
+    } 
+            
+    (regions, TemplateDocumentRegions.SCALA_DOC_REGION)
+  }
+
+  private def buildDocRegionMap(headRegion: IStructuredDocumentRegion, documentSize: Int): collection.Map[Int, IStructuredDocumentRegion] = {
     val map = new HashMap[Int, IStructuredDocumentRegion]
     map.sizeHint(documentSize / 50) // just a gut feeling that doc regions average around 50 characters in size
     var current = headRegion
@@ -249,7 +257,7 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     map
   }
 
-  def getNumberOfDocumentRegions(headRegion: IStructuredDocumentRegion) = {
+  private def getNumberOfDocumentRegions(headRegion: IStructuredDocumentRegion) = {
     @tailrec
     def aux(region: IStructuredDocumentRegion, count: Int): Int = {
       if (region == null) count
@@ -258,7 +266,7 @@ class TemplateRegionParser extends RegionParser with HasLogger {
     aux(headRegion, 0)
   }
 
-  def htmlParse(codeString: String): IStructuredDocumentRegion = {
+  private def htmlParse(codeString: String): IStructuredDocumentRegion = {
     // The block regions enable javascript and css support, as BLOCK_TEXT regions are treated special by the html component
     import org.eclipse.wst.xml.core.internal.regions.DOMRegionContext
     import org.eclipse.wst.sse.core.internal.ltk.parser.BlockMarker
