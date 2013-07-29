@@ -7,16 +7,20 @@ import scala.collection.mutable.ArrayBuffer
 import scala.collection.mutable.ListBuffer
 
 object PartitionHelpers {
+
   def isMagicAt(token: ITypedRegion, codeString: String) = {
-    val s = codeString.substring(token.getOffset(), token.getOffset() + token.getLength()).trim
-    token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && s.length == 1 && s == "@"
+    def tokenText = textOf(token, codeString).trim
+    token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && tokenText == "@"
   }
   
   def isBrace(token: ITypedRegion, codeString: String) = {
-    val s = codeString.substring(token.getOffset(), token.getOffset() + token.getLength()).trim
-    token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && s.length > 0 && s.foldLeft(true)((r, c) => r && (c == '{' || c == '}' || c.isWhitespace))
+    def tokenText = textOf(token, codeString).trim
+    token.getType() == TemplatePartitions.TEMPLATE_DEFAULT && tokenText.foldLeft(false)((r, c) => r && (c == '{' || c == '}' || c.isWhitespace))
   }
-  
+
+  private def textOf(token: ITypedRegion, documentContent: String): String = 
+    documentContent.substring(token.getOffset(), token.getOffset() + token.getLength())
+
   private def detectSequence(codeString: String, fs: List[Char => Boolean], marked: Int, isIgnored: Char => Boolean): Option[Int] = {
     val fsMutable = fs.toBuffer
     var sawBadChar = false
@@ -25,7 +29,7 @@ object PartitionHelpers {
     for (i <- 0 until codeString.length()) {
       val c = codeString(i)
       if (fsMutable.isEmpty) 
-        sawBadChar = sawBadChar || (!isIgnored(c))
+        sawBadChar = sawBadChar || !isIgnored(c)
       else {
         if (fsMutable.head(c)) {
           if (currentF == marked)
@@ -34,7 +38,7 @@ object PartitionHelpers {
           currentF += 1
         }
         else
-          sawBadChar = sawBadChar || (!isIgnored(c))
+          sawBadChar = sawBadChar || !isIgnored(c)
       }
     }
     
@@ -50,18 +54,18 @@ object PartitionHelpers {
    *  - Corresponding text matches the following pseudo-regex: (spaceOrTab?)('{' | '}')(spaceOrTab?)('@')(spaceOrTab?)
    */
   def isCombinedBraceMagicAt(token: ITypedRegion, codeString: String): Boolean = {
-    val s = codeString.substring(token.getOffset(), token.getOffset() + token.getLength())
+    def tokenText = textOf(token, codeString)
     if(token.getType() == TemplatePartitions.TEMPLATE_DEFAULT) {
       val isBrace = {c: Char => c == '{' || c == '}'}
       val isAt = {c: Char => c == '@'}
       val ignored = {c: Char => c == ' ' || c == '\t'}
-      detectSequence(s, List(isBrace, isAt), 0, ignored).isDefined
+      detectSequence(tokenText, List(isBrace, isAt), 0, ignored).isDefined
     }
     else false
   }
 
   /* Combines neighbouring regions based on some user provided criteria */
-  def explodeAdjacent[T, Repr <: Seq[ITypedRegion]](partitions: Repr)(exploder: (ITypedRegion, ITypedRegion, T) => Seq[ITypedRegion])(test: (ITypedRegion, ITypedRegion) => Option[T]): IndexedSeq[ITypedRegion] = {
+  def explodeAdjacent[T](partitions: Seq[ITypedRegion])(exploder: (ITypedRegion, ITypedRegion, T) => Seq[ITypedRegion])(test: (ITypedRegion, ITypedRegion) => Option[T]): IndexedSeq[ITypedRegion] = {
     val accum = new ArrayBuffer[ITypedRegion]
     for (region <- partitions) {
       if (accum.isEmpty)
@@ -81,13 +85,13 @@ object PartitionHelpers {
     accum
   }
 
-  private def merge(l: ITypedRegion, r: ITypedRegion, t: String) =
+  private def merge(l: ITypedRegion, r: ITypedRegion, t: String): List[TypedRegion] =
     List(new TypedRegion(l.getOffset, l.getLength + r.getLength, t))
     
-  private val htmlPartitions = Set(TemplatePartitions.TEMPLATE_PLAIN, TemplatePartitions.TEMPLATE_TAG)
+  private val htmlPartitions: Set[String] = Set(TemplatePartitions.TEMPLATE_PLAIN, TemplatePartitions.TEMPLATE_TAG)
   
   /* Combines neighbouring regions that have the same type */
-  def mergeAdjacentWithSameType[Repr <: Seq[ITypedRegion]](partitions: Repr): IndexedSeq[ITypedRegion] = {
+  def mergeAdjacentWithSameType(partitions: Seq[ITypedRegion]): IndexedSeq[ITypedRegion] = {
     explodeAdjacent(partitions)(merge) { (previousRegion, region) =>
       if (((htmlPartitions contains region.getType) && (htmlPartitions contains previousRegion.getType)) ||
          (region.getType == TemplatePartitions.TEMPLATE_SCALA && previousRegion.getType == TemplatePartitions.TEMPLATE_SCALA))
@@ -97,7 +101,7 @@ object PartitionHelpers {
   }
 
   /* Combine magic at with scala code partitions */
-  def combineMagicAt[Repr <: Seq[ITypedRegion]](partitions: Repr, codeString: String): IndexedSeq[ITypedRegion] = {
+  def combineMagicAt(partitions: Seq[ITypedRegion], codeString: String): IndexedSeq[ITypedRegion] = {
     explodeAdjacent(partitions)(merge) { (left, right) =>
       if ((isMagicAt(left, codeString) && right.getType() == TemplatePartitions.TEMPLATE_SCALA) ||
           (left.getType() == TemplatePartitions.TEMPLATE_SCALA && isMagicAt(right, codeString)))
@@ -106,16 +110,16 @@ object PartitionHelpers {
     }
   }
   
-  def separateBraceOrMagicAtFromEqual[Repr <: Seq[ITypedRegion]](partitions: Repr, codeString: String): IndexedSeq[ITypedRegion] = {
-    def explode(l: ITypedRegion, r: ITypedRegion, splitIndex: Int) = {
+  def separateBraceOrMagicAtFromEqual(partitions: Seq[ITypedRegion], codeString: String): IndexedSeq[ITypedRegion] = {
+    def explode(l: ITypedRegion, r: ITypedRegion, splitIndex: Int): Seq[ITypedRegion] = {
       val first = new TypedRegion(l.getOffset(), splitIndex - l.getOffset(), l.getType())
       val second = new TypedRegion(splitIndex, l.getLength() - first.getLength(), l.getType())
-      Array(first, second, r)
+      Seq(first, second, r)
     }
     
     explodeAdjacent(partitions)(explode) { (left, _) =>
       if (left.getType() == TemplatePartitions.TEMPLATE_DEFAULT) {
-        val code = codeString.substring(left.getOffset(), left.getOffset() + left.getLength())
+        def code = textOf(left, codeString)
         def isEquals = {c: Char => c == '='}
         def isBraceOrAt = {c: Char => c == '{' || c == '@'}
         def ignored = {c: Char => c == ' ' || c == '\t'}

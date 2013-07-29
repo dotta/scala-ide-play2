@@ -124,7 +124,7 @@ class TemplateRegionParserTest {
   private def performChecks(expected: List[IStructuredDocumentRegion], code: String, pureHTML: Boolean = false) = {
     val parser = new TemplateRegionParser
     parser.reset(code)
-    val actual = parser.computeRegions(code).toList
+    val actual = parser.templateRegions.computeRegions.toList
     
     @tailrec
     def noOverlap(list: List[ITextRegion]): Boolean = {
