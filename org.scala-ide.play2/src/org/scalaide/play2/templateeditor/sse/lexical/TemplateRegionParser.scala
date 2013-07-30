@@ -59,7 +59,7 @@ object TemplateDocumentRegions {
 
 class TemplateRegionParser extends RegionParser with HasLogger {
 
-  private[lexical] var templateRegions = new TemplateRegionsComputer("")
+  private[lexical] var templateRegions = new TemplateTextRegionsComputer("")
   override def newInstance: RegionParser = new TemplateRegionParser
 
   override def getDocumentRegions(): IStructuredDocumentRegion = templateRegions.structuredRegions.head
@@ -82,11 +82,11 @@ class TemplateRegionParser extends RegionParser with HasLogger {
       sb.append(c.toChar)
       c = reader.read()
     }
-    templateRegions = new TemplateRegionsComputer(sb.toString())
+    templateRegions = new TemplateTextRegionsComputer(sb.toString())
   }
 }
 
-class TemplateRegionsComputer(documentContent: String) extends HasLogger {
+class TemplateTextRegionsComputer(documentContent: String) extends HasLogger {
 
   /** The tokens for this `documentContent`.
    *
@@ -100,7 +100,7 @@ class TemplateRegionsComputer(documentContent: String) extends HasLogger {
   }
 
   /** Returns the `IStructuredDocumentRegion`s for this `documentContent`. */
-  private[lexical] lazy val structuredRegions: Array[IStructuredDocumentRegion] = {
+  private[lexical] val structuredRegions: Array[IStructuredDocumentRegion] = {
     lazy val token2template = new TemplateTextRegionConverter(documentContent, tokens)
 
     // merge '@' tokens with scala code tokens, and then merge any adjacent tokens of the same type.
@@ -171,7 +171,7 @@ class TemplateRegionsComputer(documentContent: String) extends HasLogger {
     resultList
   }
 
-  private lazy val htmlHeadRegion: RichStructuredDocumentRegion = {
+  private val htmlHeadRegion: RichStructuredDocumentRegion = {
     // The block regions enable javascript and css support, as BLOCK_TEXT regions are treated special by the html component
     import org.eclipse.wst.xml.core.internal.regions.DOMRegionContext
     import org.eclipse.wst.sse.core.internal.ltk.parser.BlockMarker
