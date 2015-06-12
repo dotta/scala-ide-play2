@@ -8,8 +8,11 @@ import org.scalaide.play2.PlayPlugin
 
 class RouteFormatterPreferencePage extends FieldEditorPreferencePage with IWorkbenchPreferencePage {
 
-  setPreferenceStore(PlayPlugin.preferenceStore)
-  
+  override protected def init(workbench: IWorkbench): Unit = {
+    setPreferenceStore(PlayPlugin.instance().getPreferenceStore());
+    setDescription("Play routes preference page");
+  }
+
   override def createFieldEditors() {
     val marginField = new IntegerFieldEditor(PlayPlugin.RouteFormatterMarginId, "Number of spaces between columns", getFieldEditorParent)
     marginField.setValidRange(1, 10)
@@ -18,7 +21,4 @@ class RouteFormatterPreferencePage extends FieldEditorPreferencePage with IWorkb
     val formatOnSaveToggle = new org.eclipse.jface.preference.BooleanFieldEditor(PlayPlugin.RouteFormatterFormatOnSaveId, "Format on save", getFieldEditorParent)
     addField(formatOnSaveToggle);
   }
-
-  def init(workbench: IWorkbench) {}
-
 }

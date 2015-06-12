@@ -13,14 +13,48 @@ import org.eclipse.swt.widgets.Composite
 import org.eclipse.swt.widgets.Display
 import org.eclipse.ui.IWorkbenchPropertyPage
 import org.scalaide.play2.PlayPlugin
+import org.scalaide.play2.Play
+import org.eclipse.ui.IWorkbench
+import org.eclipse.ui.IWorkbenchPreferencePage
 
 /** Preference page displayed in the property dialog of (play) projects.
  *  Used from the UI thread.
  */
 class ProjectPropertyPage extends FieldEditorPreferencePage(FieldEditorPreferencePage.GRID) with IWorkbenchPropertyPage {
 
-  /** Preference field to display the list of extra imports.
-   */
+  private var prefStore: IPreferenceStore = _
+
+  override protected def createFieldEditors() {
+    import ProjectPropertyPage._
+    addField(new PlayProjectVersion(getFieldEditorParent()))
+    addField(new ImportsFieldEditor(PlayPreferences.TemplateImports, "Template default imports", getFieldEditorParent()))
+  }
+
+  override protected def doGetPreferenceStore(): IPreferenceStore = prefStore
+  
+  // Members declared in org.eclipse.ui.IWorkbenchPropertyPage
+
+  // doesn't seem to be a real function for this method.
+  // It looks like it leaked from the implementation of PropertyPage.
+  override def getElement(): IAdaptable = null
+
+  override def setElement(element: IAdaptable): Unit = {
+    prefStore = element match {
+      case project: IProject =>
+        PlayPlugin.asPlayProject(project).get.generateScopedPreferenceStore
+      case project: IJavaProject =>
+        PlayPlugin.asPlayProject(project.getProject()).get.generateScopedPreferenceStore
+      case _ => null
+    }
+  }
+}
+
+object ProjectPropertyPage { 
+  import org.eclipse.jface.preference.ComboFieldEditor
+  private def supportedVersions = Play.SupportedVersion.toArray.map(version => Array(version, version))
+  class PlayProjectVersion(parent:Composite) extends ComboFieldEditor(PlayPreferences.PlayVersion, "Play version", supportedVersions, parent)
+  
+  /** Preference field to display the list of extra imports. */
   private class ImportsFieldEditor(name: String, labelText: String, parent: Composite) extends ListEditor(name, labelText, parent) {
 
     override protected def createList(entries: Array[String]): String =
@@ -30,7 +64,6 @@ class ProjectPropertyPage extends FieldEditorPreferencePage(FieldEditorPreferenc
       PlayPreferences.deserializeImports(s)
 
     override protected def getNewInputObject(): String = {
-
       val dlg = new InputDialog(
         Display.getCurrent().getActiveShell(),
         "Play template import",
@@ -46,38 +79,5 @@ class ProjectPropertyPage extends FieldEditorPreferencePage(FieldEditorPreferenc
         null
       }
     }
-
   }
-
-  // The preference store being edited.
-  // The data require to get the store is provided by the workbench during the page lifecycle.
-  private var prefStore: IPreferenceStore = _
-
-  // Members declared in org.eclipse.jface.preference.FieldEditorPreferencePage
-
-  override def createFieldEditors() {
-    addField(new ImportsFieldEditor(PlayPreferences.TemplateImports, "Template default imports", getFieldEditorParent()))
-  }
-
-  // Members declared in org.eclipse.ui.IWorkbenchPropertyPage
-
-  // doesn't seem to be a real function for this method.
-  // It looks like it leaked from the implementation of PropertyPage.
-  override def getElement(): IAdaptable = null
-
-  override def setElement(element: IAdaptable) {
-    prefStore = element match {
-      case project: IProject =>
-        PlayPlugin.instance().asPlayProject(project).get.generateScopedPreferenceStore
-      case project: IJavaProject =>
-        PlayPlugin.instance().asPlayProject(project.getProject()).get.generateScopedPreferenceStore
-    }
-  }
-
-  // ----
-
-  override def doGetPreferenceStore(): IPreferenceStore = {
-    prefStore
-  }
-
 }

@@ -29,7 +29,7 @@ trait AbstractTemplateEditor extends SourceCodeEditor { self: TextEditor =>
 
 class TemplateEditor extends TextEditor with AbstractTemplateEditor {
 
-  override protected lazy val preferenceStore: IPreferenceStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
+  override protected lazy val preferenceStore: IPreferenceStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.instance().getPreferenceStore()))
   private val sourceViewConfiguration = new TemplateConfiguration(preferenceStore, this)
   private val documentProvider = new TemplateDocumentProvider()
 

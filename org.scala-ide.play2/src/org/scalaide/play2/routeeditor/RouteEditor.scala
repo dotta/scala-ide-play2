@@ -21,7 +21,7 @@ import org.eclipse.ui.texteditor.TextOperationAction
 import org.scalaide.play2.PlayPlugin
 
 class RouteEditor extends TextEditor with ISourceViewerEditor with HasLogger with HasScalaProject { self =>
-  private lazy val preferenceStore = new ChainedPreferenceStore(Array(PlayPlugin.preferenceStore, EditorsUI.getPreferenceStore))
+  private lazy val preferenceStore = new ChainedPreferenceStore(Array(PlayPlugin.instance().getPreferenceStore(), EditorsUI.getPreferenceStore))
   private val config = new RouteConfiguration(preferenceStore, this)
 
   this.setPreferenceStore(preferenceStore)
@@ -57,7 +57,7 @@ class RouteEditor extends TextEditor with ISourceViewerEditor with HasLogger wit
         HandlerUtil.getActiveEditor(event) match {
           case routeEditor: RouteEditor if routeEditor eq self => {
             val isSaveAction = commandid == "org.eclipse.ui.file.save"
-            val shouldFormatOnSave = PlayPlugin.preferenceStore.getBoolean(PlayPlugin.RouteFormatterFormatOnSaveId)
+            val shouldFormatOnSave = PlayPlugin.instance().getPreferenceStore().getBoolean(PlayPlugin.RouteFormatterFormatOnSaveId)
             if (isSaveAction && shouldFormatOnSave) {
               val document = routeEditor.getSourceViewer.getDocument
               routeEditor.config.getContentFormatter(routeEditor.getSourceViewer).format(document, new Region(0, document.getLength))

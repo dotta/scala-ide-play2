@@ -6,7 +6,7 @@ import org.junit.Assert.assertEquals
 import org.scalaide.play2.PlayPlugin
 
 abstract class AbstractRouteScannerTest {
-  protected val prefStore = PlayPlugin.preferenceStore
+  protected val prefStore = PlayPlugin.instance().getPreferenceStore
   protected val scanner : AbstractRouteScanner
   protected val defaultToken = scanner.getDefaultReturnToken
   protected val wsToken = Token.WHITESPACE

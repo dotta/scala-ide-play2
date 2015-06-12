@@ -18,6 +18,8 @@ object PlayPreferences {
    */
   final val TemplateImports = "templateImports"
 
+  final val PlayVersion = "playVersion"
+
   // Regex used for the operations on the templateImports preference.
   private val importsRegex = "import ([^\n]+)\n".r
 

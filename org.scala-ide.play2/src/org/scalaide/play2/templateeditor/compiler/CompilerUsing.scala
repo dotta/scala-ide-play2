@@ -19,15 +19,7 @@ import org.scalaide.core.compiler.ScalaCompilationProblem
  * a helper for using template compiler
  */
 object CompilerUsing extends HasLogger {
-  val templateCompiler = TwirlCompiler
-  val defaultTemplateImports = """
-import models._
-import controllers._
-import play.api.i18n._
-import play.api.mvc._
-import play.api.data._
-import views.html._
-"""
+  private val templateCompiler = TwirlCompiler
 
   /**
    * invokes compile method of template compiler and returns generated source object or
@@ -39,15 +31,17 @@ import views.html._
       logger.debug(s"Template file '${source.getAbsolutePath}' must be located in '$sourcePath' or one of its subfolders!")
 
     val extension = source.getName.split('.').last
+    val templateImports = playProject.playSupport.templateImports
 
     Try {
       templateCompiler.compileVirtual(
         content,
         source,
         playProject.sourceDir,
-        "play.api.templates.Html",
-        "play.api.templates.HtmlFormat",
-        defaultTemplateImports + playProject.additionalTemplateImports(extension),
+        templateImports.templateResultType,
+        templateImports.templateFormatterType,
+        formatImports(templateImports.defaultScalaTemplateImports, extension),
+        // formatImports(playProject.additionalTemplateImports(extension), extension),
         Codec.default,
         inclusiveDot
       )
@@ -62,6 +56,9 @@ import views.html._
     }
   }
 
+  private def formatImports(templateImports: Seq[String], extension: String): String = {
+    templateImports.map("import " + _.replace("%format%", extension)).mkString("\n")
+  }
 }
 
 case class TemplateToScalaCompilationError(source: File, message: String, offset: Int, line: Int, column: Int) extends RuntimeException(message) {

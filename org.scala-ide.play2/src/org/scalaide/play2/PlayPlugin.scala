@@ -23,41 +23,43 @@ object PlayPlugin {
   /** Return the current plugin instace */
   def instance(): PlayPlugin = plugin
 
-  /** Return the plugin-wide preference store */
-  def preferenceStore: IPreferenceStore = plugin.getPreferenceStore
+  def getImageDescriptor(path: String): ImageDescriptor =
+    AbstractUIPlugin.imageDescriptorFromPlugin(PluginId, path)
 
-  def getImageDescriptor(path: String): ImageDescriptor = {
-    AbstractUIPlugin.imageDescriptorFromPlugin(PluginId, path);
-  }
-
-  def log(status: Int, msg: String, ex: Throwable = null): Unit = {
+  def log(status: Int, msg: String, ex: Throwable = null): Unit =
     plugin.getLog.log(new Status(status, plugin.getBundle().getSymbolicName(), msg, ex))
+
+  def isPlayProject(project: IProject): Boolean = asPlayProject(project).isDefined
+
+  def asPlayProject(project: IProject): Option[PlayProject] = {
+    for {
+      scalaPlugin <- Option(IScalaPlugin())
+      scalaProject <- scalaPlugin.asScalaProject(project)
+    } yield PlayProject(scalaProject)
   }
 }
 
 class PlayPlugin extends AbstractUIPlugin {
   override def start(context: BundleContext): Unit = {
-    super.start(context)
     PlayPlugin.plugin = this
+    super.start(context)
     initializeProjects()
+  }
+
+  private def initializeProjects(): Unit = {
+    // FIXME: All Scala projects are paying a penalty if the Play2 support is installed.
+    //        I don't like it, but I'm not sure how to fix this. Maybe we should add a 
+    //        Play Nature?
+    //        Also, how is the `Play2PropertyTester` used/useful?
+    for {
+      project <- ResourcesPlugin.getWorkspace.getRoot.getProjects
+      if project.isOpen
+    } PlayPlugin.asPlayProject(project)
   }
 
   override def stop(context: BundleContext): Unit = {
     PlayPlugin.plugin = null
     super.stop(context)
-  }
-
-  def asPlayProject(project: IProject): Option[PlayProject] = {
-    val scalaProject = IScalaPlugin().asScalaProject(project)
-    scalaProject map (PlayProject(_))
-  }
-
-  private def initializeProjects(): Unit = {
-    for {
-      iProject <- ResourcesPlugin.getWorkspace.getRoot.getProjects
-      if iProject.isOpen
-      playProject <- asPlayProject(iProject)
-    } playProject.initialize()
   }
 
   override def initializeImageRegistry(reg: ImageRegistry) {

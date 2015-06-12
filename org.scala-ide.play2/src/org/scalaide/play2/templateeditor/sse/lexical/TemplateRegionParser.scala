@@ -463,7 +463,7 @@ private class TemplateTextRegionConverter(documentContent: String, tokens: Seq[I
 }
 
 private object TemplateTextRegionConverter {
-  val preferenceStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
+  val preferenceStore = new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.instance().getPreferenceStore()))
 }
 
 // This is a copy and pasted implementation of AttributeNameRegion, with the only change being that adjustTextLength

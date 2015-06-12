@@ -132,7 +132,7 @@ class RouteFormattingStrategy(val editor: ITextEditor) extends IFormattingStrate
     import RouteFormattingStrategy._
 
     val lines = getLines(document)
-    val margin = PlayPlugin.preferenceStore.getInt(PlayPlugin.RouteFormatterMarginId)
+    val margin = PlayPlugin.instance().getPreferenceStore().getInt(PlayPlugin.RouteFormatterMarginId)
     val maxHttpVerbLength = getMaxHttpVerbLength(lines) + margin
     val maxUriLength = getMaxUriLength(lines) + margin
     val eclipseEdits = lines flatMap { route =>

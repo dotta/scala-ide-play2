@@ -22,7 +22,7 @@ import scala.concurrent._
 class TemplateStructuredEditor extends StructuredTextEditor with AbstractTemplateEditor {
 
   override protected lazy val preferenceStore: IPreferenceStore =
-    new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.preferenceStore))
+    new ChainedPreferenceStore(Array((EditorsUI.getPreferenceStore()), PlayPlugin.instance().getPreferenceStore()))
 
   /* This is a nasty hack.
    * The problem:  The TemplateStructuredTextViewerConfiguration needs the pref store and a reference to the editor.
